@@ -1,0 +1,889 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Combat Lab 1.6</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Chakra+Petch:wght@500;700&display=swap">
+<style>
+  :root { color-scheme: dark; --bg:#07091a; --panel:#10142c; --line:#262c58; --text:#e9e7ff; --dim:#8b8fb8; --gold:#ffcc4d; --cyan:#4dd8ff; }
+  html, body { background: var(--bg); color: var(--text); }
+  body { font-family: "Atkinson Hyperlegible", "Segoe UI", sans-serif; padding-inline: 16px; padding-block: 20px 40px; }
+  .wrap { max-width: 980px; margin: 0 auto; display: grid; gap: 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; }
+  h1 { font-family: "Chakra Petch", sans-serif; font-size: 26px; margin: 0; letter-spacing: .04em; }
+  h1 span { color: var(--cyan); }
+  header p { margin: 0; color: var(--dim); font-size: 14px; }
+  #game { width: 100%; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #0a0d1c; }
+  #game canvas { display: block; }
+  .rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+  .rule { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; }
+  .rule b { font-family: "Chakra Petch", sans-serif; letter-spacing: .05em; font-size: 13px; text-transform: uppercase; color: var(--gold); display: block; margin-bottom: 4px; }
+  .rule p { margin: 0; font-size: 14px; line-height: 1.45; color: var(--text); }
+  .tip { color: var(--dim); font-size: 13px; margin: 0; }
+</style>
+<div class="wrap">
+  <header>
+    <h1>COMBAT <span>LAB</span></h1>
+    <p>Prototype 1.6 · Phaser build · placeholder shapes, real rules</p>
+  </header>
+  <div id="game"></div>
+  <div class="rules">
+    <div class="rule"><b>Wind-ups</b><p>Every move takes ticks to land. The track at the top shows who fires when, and how strong each beam is.</p></div>
+    <div class="rule"><b>Chakra</b><p>Beams, Power Charge and Assist cost chakra. Strikes give 3 back, and each turn regains 2.</p></div>
+    <div class="rule"><b>Beam timing</b><p>Choose how long to charge. Arc Beam 2–4t, Solar Lance 3–6t, Nova Cannon 4–8t. Longer means stronger and costlier.</p></div>
+    <div class="rule"><b>⚡ Beams</b><p>Only ⚡ moves are beams: Arc Beam, Solar Lance, Nova Cannon and the Warden's Gravity Beam. Beams draw solid lines; melee draws dashes. Only a beam can clash with a beam.</p></div>
+    <div class="rule"><b>Beam Clash</b><p>Meet an enemy beam with your own. More power starts you ahead. Losing still soaks 20–70% of the hit.</p></div>
+    <div class="rule"><b>Team up</b><p>Assist takes 1 tick, adds +16 and infuses your element: Kai burns, Rook shells the charger, Vex shocks (delays the target 2t). Mixing elements adds combo power.</p></div>
+    <div class="rule"><b>Grapple</b><p>Rook runs in (1t) and pins the target of an ally's charge. The pinned enemy is frozen and takes +25%. Rook eats 20% splash; a 20+ hit breaks his grip.</p></div>
+    <div class="rule"><b>React</b><p>Reactions are never free. An idle hero loses time (Dive in +2t, Brace +1t). A charging hero loses power instead (−30% / −15%).</p></div>
+    <div class="rule"><b>Focus &amp; bailing out</b><p>Hits on a charging hero can shake focus (damage × 2.5% chance): −25% power and +1t. About to be hit mid-charge? Fire early at 80%, or abort and get half your chakra back.</p></div>
+  </div>
+  <p class="tip">Keys 1–9 pick menu options. Resolve fills when you take hits and land big attacks.</p>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.80.1/phaser.min.js"></script>
+<script>
+// =====================================================================
+//  COMBAT LAB v0.6  —  timeline combat prototype (Phaser 3)
+//  Every number you might want to tune lives in CONFIG below.
+// =====================================================================
+const CONFIG = {
+  tickMs: 450,              // real-time length of one timeline tick
+  timelineSpan: 12,         // ticks visible on the timeline
+  resolve: { start: 3, max: 10, onHitTaken: 1, onBigHitLanded: 1 },
+  reactPromptMinDamage: 15, // enemy hits this big trigger a reaction prompt
+  // Getting hit while charging (3t+ moves) can shake your focus. Chance = damage × chancePerDamage.
+  focus: { chancePerDamage: 0.025, maxChance: 0.85, powerLoss: 0.25, delay: 1 },
+  // Reactions are never free. Idle heroes lose time; charging heroes lose power.
+  reactCost: { diveIdleDelay: 2, braceIdleDelay: 1, diveChargeLoss: 0.3, braceChargeLoss: 0.15 },
+  // Ways out of a charge you over-committed to (offered when you're about to be hit):
+  fireEarly: { powerMult: 0.8 },  // release now: power for the ticks charged so far × 0.8
+  abortCharge: { refund: 0.5 },   // cancel: get back half the chakra you spent
+  diveIn: { cost: 2, reduction: 0.3 },
+  brace: { cost: 1, reduction: 0.5 },
+  guardReduction: 0.5,
+  bodyguardReduction: 0.25,
+  chakra: { regenPerTurn: 2 },   // each hero regains this at the start of their turn
+  clash: {
+    durationMs: 3500, pushPerTap: 0.06, enemyPushPerSec: 0.32,
+    powerBias: 0.012,       // start position shift per point of power difference
+    maxStartShift: 0.6,
+    winKeepsEnemyBeam: 0.3, // on a win, this share of the enemy beam gets thrown back too
+    loseTakeMin: 0.3,       // lose a close clash: take 30% of their beam
+    loseTakeMax: 0.8,       // get fully overpowered: take 80% (never the full hit)
+  },
+  // Beams: pick how many ticks to charge within [min,max].
+  // power = base + perTick × ticks, chakra cost = costPerTick × ticks
+  moves: {
+    strike:    { name: 'Strike',       short: 'STRIKE', kind: 'attack', windup: 2, dmg: 14, recover: 1, chakraGain: 3 },
+    charge:    { name: 'Power Charge', short: 'CHARGE', kind: 'attack', windup: 4, dmg: 34, recover: 1, cost: 6, assistable: true },
+    arc:       { name: 'Arc Beam',     short: 'ARC',    kind: 'beam', min: 2, max: 4, base: 8, perTick: 7, costPerTick: 2, recover: 1, assistable: true },
+    solar:     { name: 'Solar Lance',  short: 'LANCE',  kind: 'beam', min: 3, max: 6, base: 6, perTick: 7, costPerTick: 2, recover: 1, assistable: true },
+    nova:      { name: 'Nova Cannon',  short: 'NOVA',   kind: 'beam', min: 4, max: 8, base: 0, perTick: 10, costPerTick: 3, recover: 2, assistable: true },
+    guard:     { name: 'Guard',        short: 'GUARD',  kind: 'guard', recover: 2 },
+    bodyguard: { name: 'Bodyguard',    short: 'GUARD',  kind: 'bodyguard', recover: 2 },
+    assist:    { name: 'Assist',       short: 'ASSIST', kind: 'assist', bonus: 16, cost: 3, ticks: 1 },
+    wait:      { name: 'Wait',         short: 'WAIT',   kind: 'wait' },
+    // Grapple: run in (reach ticks), pin the target of an ally's charge until it lands.
+    // A pinned enemy is frozen (its action and turn wait) and takes bonus damage; the grappler eats some splash.
+    grapple:   { name: 'Grapple',      short: 'GRAB',   kind: 'grapple', reach: 1, maxHold: 5, pinnedBonus: 0.25, splash: 0.2, breakDamage: 20 },
+    // enemy moves
+    jab:       { name: 'Jab',          short: 'JAB',    kind: 'attack', windup: 2, dmg: 8,  recover: 2 },
+    crush:     { name: 'Crush',        short: 'CRUSH',  kind: 'attack', windup: 3, dmg: 22, recover: 1 },
+    gravity:   { name: 'Gravity Beam', short: 'G-BEAM', kind: 'beam', min: 4, max: 7, base: 6, perTick: 8, recover: 2 },
+  },
+  // Assisting infuses the ally's beam/charge with the helper's element.
+  infusions: {
+    burn:  { name: 'Solar Burn',    tag: 'BURN',  desc: 'target burns 4/tick for 5t', perTick: 4, ticks: 5 },
+    shell: { name: 'Lattice Shell', tag: 'SHELL', desc: 'charger takes 40% less and can\'t be broken', reduction: 0.4 },
+    shock: { name: 'Arc Shock',     tag: 'SHOCK', desc: "delays target's next action 2t · clash head start", delay: 2, clashPush: 0.15 },
+  },
+  comboBonusPerExtraInfusion: 10, // each different element beyond the first adds this much power
+  heroes: [
+    { id: 'kai',  name: 'Kai',  race: 'Human · carbon-rich',  hp: 100, chakra: 30, startReady: 0, color: 0x4dd8ff, infusion: 'burn',
+      moves: ['strike', 'charge', 'solar', 'nova', 'assist', 'guard', 'wait'] },
+    { id: 'rook', name: 'Rook', race: 'Silicate · silicon-rich', hp: 140, chakra: 14, startReady: 1, color: 0x9be86a, infusion: 'shell',
+      moves: ['strike', 'grapple', 'bodyguard', 'assist', 'guard', 'wait'] },
+    { id: 'vex',  name: 'Vex',  race: 'Ferric · iron-rich',   hp: 85,  chakra: 22, startReady: 2, color: 0xffa94d, infusion: 'shock',
+      moves: ['strike', 'arc', 'assist', 'guard', 'wait'] },
+  ],
+  enemies: [
+    { id: 'da', name: 'Drone α', hp: 40, startReady: 2, pattern: ['jab'], color: 0xff4d8d, x: 650, y: 228, r: 26 },
+    { id: 'wd', name: 'Void Warden', hp: 380, startReady: 1, pattern: ['gravity', 'crush', 'crush'], color: 0xb77bff, x: 810, y: 318, r: 52 },
+    { id: 'db', name: 'Drone β', hp: 40, startReady: 3, pattern: ['jab'], color: 0xff4d8d, x: 650, y: 404, r: 26 },
+  ],
+};
+
+const COL = {
+  bg: 0x0a0d1c, panel: 0x141936, panelLine: 0x2a3160, text: '#e9e7ff', dim: '#8b8fb8',
+  gold: 0xffcc4d, goldCss: '#ffcc4d', danger: '#ff6b8f', track: 0x39407a,
+};
+const FONT_D = '"Chakra Petch", "Trebuchet MS", sans-serif';
+const FONT_B = '"Atkinson Hyperlegible", "Segoe UI", sans-serif';
+const W = 960, H = 680;
+const beamPower = (m, t) => m.base + m.perTick * t;
+const isBeam = (m) => m.kind === 'beam';
+const shortTag = (key) => (isBeam(CONFIG.moves[key]) ? '⚡' : '') + CONFIG.moves[key].short;
+const hex = (n) => '#' + n.toString(16).padStart(6, '0');
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+class Battle extends Phaser.Scene {
+  constructor() { super('battle'); }
+
+  create() {
+    this.cameras.main.setBackgroundColor(COL.bg);
+    this.drawBackdrop();
+    this.dyn = this.add.container(0, 0).setDepth(5);   // timeline, lines, menu (rebuilt)
+    this.fx = this.add.container(0, 0).setDepth(20);
+    this.input.keyboard.on('keydown', (e) => this.onKey(e));
+    this.input.on('pointerdown', () => { if (this.clashState) this.clashTap(); });
+    this.startBattle();
+    window.__lab = this; // test hook
+  }
+
+  drawBackdrop() {
+    const g = this.add.graphics().setDepth(0);
+    for (let i = 0; i < 120; i++) {
+      g.fillStyle(0xffffff, Math.random() * 0.5 + 0.1);
+      g.fillCircle(Math.random() * W, Math.random() * 440, Math.random() * 1.3 + 0.2);
+    }
+    g.fillStyle(COL.panel, 1); g.fillRect(0, 452, W, H - 452 + 4);
+    g.lineStyle(1, COL.panelLine, 1); g.lineBetween(0, 452, W, 452); g.lineBetween(430, 464, 430, H - 12);
+    g.fillStyle(COL.panel, 0.85); g.fillRect(0, 0, W, 152);
+    g.lineStyle(1, COL.panelLine, 1); g.lineBetween(0, 152, W, 152);
+  }
+
+  // ------------------------------------------------------------ state
+  startBattle() {
+    this.battleId = (this.battleId || 0) + 1;
+    this.clock = 0; this.seq = 0; this.resolve = CONFIG.resolve.start;
+    this.log = ['Timeline combat: every action takes ticks to wind up. Watch the track above.'];
+    this.menu = null; this.active = null; this.over = false;
+    if (this.unitViews) this.unitViews.forEach((v) => v.c.destroy());
+    this.units = [];
+    CONFIG.heroes.forEach((d, i) => this.units.push(this.mkUnit(d, 'hero', { x: 270, y: 215 + i * 95, r: 30 })));
+    CONFIG.enemies.forEach((d) => this.units.push(this.mkUnit(d, 'enemy', d)));
+    this.unitViews = this.units.map((u) => this.mkView(u));
+    this.redraw();
+    this.loop(this.battleId);
+  }
+  mkUnit(d, side, pos) {
+    return { ...d, side, x: pos.x, y: pos.y, r: pos.r, maxHp: d.hp, hp: d.hp, readyAt: d.startReady,
+      pending: null, guard: false, protecting: null, pIdx: 0, alive: true, maxChakra: d.chakra || 0, home: { x: pos.x, y: pos.y }, heldBy: null };
+  }
+  heroes() { return this.units.filter((u) => u.side === 'hero' && u.alive); }
+  enemies() { return this.units.filter((u) => u.side === 'enemy' && u.alive); }
+  gainResolve(n) { this.resolve = clamp(this.resolve + n, 0, CONFIG.resolve.max); }
+  say(s) { this.log.push(s); if (this.log.length > 5) this.log.shift(); }
+  wait(ms) { return new Promise((r) => this.time.delayedCall(ms, r)); }
+
+  // ------------------------------------------------------------ main loop
+  async loop(id) {
+    while (id === this.battleId) {
+      await this.processResolutions();
+      if (this.checkEnd() || id !== this.battleId) return;
+      await this.processReadies();
+      if (this.checkEnd() || id !== this.battleId) return;
+      this.redraw();
+      await this.wait(CONFIG.tickMs);
+      if (id !== this.battleId) return;
+      this.clock++;
+    }
+  }
+
+  async processResolutions() {
+    for (const h of this.heroes()) {                     // grapplers arrive and grab
+      const p = h.pending;
+      if (p && p.kind === 'grapple' && !p.grabbed && this.clock >= p.grabAt) {
+        if (!p.target.alive || p.target.heldBy) { this.releaseGrapple(h, null); continue; }
+        p.grabbed = true; p.target.heldBy = h;
+        h.x = p.target.x - p.target.r - 36; h.y = p.target.y;
+        const v = this.unitViews.find((x) => x.u === h);
+        this.moveView(h, 220);
+        this.flashText(p.target, 'GRABBED!', '#ffffff'); this.cameras.main.shake(120, 0.005);
+        this.say(`${h.name} grabs ${p.target.name} and holds on for ${p.host.name}!`);
+      }
+    }
+    for (const e of this.enemies()) if (e.heldBy) {       // pinned enemies are frozen
+      if (e.pending) {
+        e.pending.resolveAt = Math.max(e.pending.resolveAt, this.clock + 1);
+        for (const h of this.heroes()) if (h.pending && h.pending.clashWith === e) h.pending.resolveAt = e.pending.resolveAt;
+      } else e.readyAt = Math.max(e.readyAt, this.clock + 1);
+    }
+    for (const e of this.enemies()) if (e.burn && e.burn.left > 0 && e.burn.lastTick !== this.clock) {
+      e.burn.lastTick = this.clock; e.burn.left--;
+      this.damage(e, e.burn.perTick, false, true);
+    }
+    const due = this.units.filter((u) => u.alive && u.pending && u.pending.resolveAt <= this.clock)
+      .sort((a, b) => a.pending.seq - b.pending.seq);
+    for (const u of due) {
+      if (!u.alive || !u.pending || u.pending.resolveAt > this.clock) continue;
+      const p = u.pending;
+      if (p.kind === 'assist') { u.pending = null; u.readyAt = this.clock; continue; } // quick help, then free
+      if (p.kind === 'grapple') continue;             // released when the ally's attack lands
+      if (p.clashWith) {                              // resolved inside the enemy beam…
+        if (p.clashWith.alive && p.clashWith.pending) continue;
+        p.clashWith = null;                           // …unless that enemy is gone: fire normally
+      }
+      if (u.side === 'hero') await this.heroResolve(u);
+      else await this.enemyResolve(u);
+      this.redraw();
+    }
+  }
+
+  async processReadies() {
+    for (const e of this.enemies()) if (!e.pending && e.readyAt <= this.clock) await this.enemyChoose(e);
+    this.redraw();
+    for (const h of this.heroes()) {
+      if (!h.alive || h.pending || h.readyAt > this.clock) continue;
+      h.guard = false; h.protecting = null;
+      h.chakra = Math.min(h.maxChakra, h.chakra + CONFIG.chakra.regenPerTurn);
+      await this.heroTurn(h);
+      this.redraw();
+      if (this.checkEnd()) return;
+    }
+  }
+
+  checkEnd() {
+    if (this.over) return true;
+    const win = this.enemies().length === 0, lose = this.heroes().length === 0;
+    if (!win && !lose) return false;
+    this.over = true; this.menu = null; this.active = null;
+    this.say(win ? 'Victory! The squad holds the line.' : 'Defeat. The squad is down.');
+    this.redraw(); this.showEnd(win);
+    return true;
+  }
+
+  // ------------------------------------------------------------ enemies
+  async enemyChoose(e) {
+    const key = e.pattern[e.pIdx % e.pattern.length]; e.pIdx++;
+    const m = CONFIG.moves[key];
+    const hs = this.heroes();
+    const target = key === 'crush' ? hs.reduce((a, b) => (b.hp < a.hp ? b : a)) : hs[Math.floor(Math.random() * hs.length)];
+    const ticks = isBeam(m) ? m.min + Math.floor(Math.random() * (m.max - m.min + 1)) : m.windup;
+    const power = isBeam(m) ? beamPower(m, ticks) : m.dmg;
+    e.pending = { key, kind: m.kind, target, ticks, power, startAt: this.clock, resolveAt: this.clock + ticks, seq: this.seq++, bonus: 0 };
+    this.say(`${e.name} begins ${isBeam(m) ? 'BEAM · ' : ''}${m.name}${isBeam(m) ? ` (${power} power)` : ''} → ${target.name} (lands in ${ticks}t)`);
+    if (isBeam(m)) await this.redirectPrompt(e);
+  }
+
+  // A hero already charging a beam can bend it to meet a new enemy beam.
+  redirectPrompt(e) {
+    const ep = e.pending;
+    const cands = this.heroes().map((h) => {
+      const p = h.pending; if (!p || p.kind !== 'beam' || p.clashWith) return null;
+      const m = CONFIG.moves[p.key], nt = ep.resolveAt - p.startAt;
+      if (nt < m.min || nt > m.max || nt <= this.clock - p.startAt) return null;
+      const extra = (nt - p.ticks) * m.costPerTick;
+      if (extra > h.chakra) return null;
+      return { h, m, nt, extra, pow: beamPower(m, nt) + (p.bonus || 0) };
+    }).filter(Boolean);
+    if (!cands.length) return Promise.resolve();
+    return new Promise((resolve) => {
+      const opts = cands.map((c) => ({ label: `${c.h.name}: redirect to CLASH`, hot: true,
+        sub: `${c.m.short} ${c.nt}t · ${c.pow} vs ${ep.power} · ${c.extra >= 0 ? `+${c.extra}` : c.extra} ck`,
+        on: () => {
+          const p = c.h.pending; c.h.chakra -= c.extra; p.spent = (p.spent || 0) + c.extra;
+          p.ticks = c.nt; p.power = beamPower(c.m, c.nt); p.resolveAt = ep.resolveAt; p.clashWith = e; p.target = e;
+          for (const a of this.heroes()) if (a.pending && a.pending.host === c.h) a.pending.resolveAt = ep.resolveAt;
+          this.say(`${c.h.name} bends the ${c.m.name} to meet the ${CONFIG.moves[ep.key].name}! CLASH LOCKED.`);
+          this.menu = null; this.active = null; this.redraw(); resolve();
+        } }));
+      opts.push({ label: 'Keep charging', sub: 'fire at the original target', on: () => { this.menu = null; this.active = null; this.redraw(); resolve(); } });
+      this.active = cands[0].h;
+      this.menu = { title: `${e.name} is charging a ${ep.ticks}t ${CONFIG.moves[ep.key].name} (${ep.power})! Redirect a beam already charging?`, danger: true, opts };
+      this.redraw();
+    });
+  }
+
+  async enemyResolve(e) {
+    const p = e.pending, m = CONFIG.moves[p.key];
+    e.pending = null; e.readyAt = this.clock + m.recover;
+    const clasher = this.units.find((h) => h.alive && h.pending && h.pending.clashWith === e);
+    if (clasher) { await this.beamClash(clasher, e, m, p); return; }
+    let target = p.target.alive ? p.target : this.heroes()[0];
+    if (!target) return;
+    await this.lunge(e, target, m);
+    let dmg = p.power, note = '';
+    const guard = this.heroes().find((h) => h.protecting === target && h !== target);
+    if (guard) {
+      target = guard; dmg *= 1 - CONFIG.bodyguardReduction;
+      note = ` ${guard.name} steps in as Bodyguard!`;
+    } else {
+      const est = dmg * (target.guard ? CONFIG.guardReduction : 1);
+      if (est >= CONFIG.reactPromptMinDamage && (this.resolve >= CONFIG.brace.cost || this.isCharging(target))) {
+        const r = await this.reactionPrompt(e, m, target, Math.round(est));
+        if (r.type === 'fire') { await this.heroResolve(target); this.redraw(); }
+        if (r.type === 'dive') { target = r.hero; dmg *= 1 - CONFIG.diveIn.reduction; this.gainResolve(-CONFIG.diveIn.cost); note = ` ${r.hero.name} DIVES IN front of the attack!`; this.flashText(r.hero, 'DIVE IN!', '#ffffff'); }
+        else if (r.type === 'brace') { dmg *= 1 - CONFIG.brace.reduction; this.gainResolve(-CONFIG.brace.cost); note = ` ${target.name} braces.`; }
+      }
+    }
+    if (target.guard) dmg *= CONFIG.guardReduction;
+    this.say(`${e.name}'s ${m.name} hits ${target.name} for ${Math.round(dmg)}.${note}`);
+    this.damage(target, Math.round(dmg), isBeam(m));
+  }
+
+  // ------------------------------------------------------------ heroes
+  async heroResolve(h) {
+    const p = h.pending, m = CONFIG.moves[p.key];
+    h.pending = null; h.readyAt = this.clock + m.recover;
+    let target = p.target && p.target.alive ? p.target : this.enemies()[0];
+    if (!target) { this.releaseAssisters(h); return; }
+    let dmg = p.power + (p.bonus || 0);
+    const grab = this.heroes().find((g) => g.pending && g.pending.kind === 'grapple' && g.pending.host === h && g.pending.grabbed && target.heldBy === g);
+    if (grab) dmg = Math.round(dmg * (1 + CONFIG.moves.grapple.pinnedBonus));
+    await this.lunge(h, target, m);
+    this.say(`${h.name}'s ${m.name} hits ${target.name} for ${dmg}${p.bonus ? ` (+${p.bonus} team power)` : ''}${grab ? ' (pinned +25%)' : ''}.`);
+    this.damage(target, dmg, isBeam(m));
+    if (grab) {
+      const sp = Math.round(dmg * CONFIG.moves.grapple.splash);
+      this.say(`${grab.name} takes ${sp} splash but held on to the end!`);
+      this.releaseGrapple(grab, null);
+      this.damage(grab, sp, false);
+    }
+    this.releaseAssisters(h);
+    this.applyInfusions(target, p);
+    if (p.ticks >= 3) this.gainResolve(CONFIG.resolve.onBigHitLanded);
+    if (m.chakraGain) { h.chakra = Math.min(h.maxChakra, h.chakra + m.chakraGain); this.flashText(h, `+${m.chakraGain} CHAKRA`, '#b3a8ff'); }
+  }
+
+  applyInfusions(t, p) {
+    if (!t.alive || !p.infusions) return;
+    if (p.infusions.includes('burn')) {
+      const b = CONFIG.infusions.burn; t.burn = { perTick: b.perTick, left: b.ticks };
+      this.flashText(t, 'BURNING', '#ffb14d'); this.say(`${t.name} is burning (${b.perTick}/tick for ${b.ticks}t).`);
+    }
+    if (p.infusions.includes('shock')) {
+      const d = CONFIG.infusions.shock.delay;
+      if (t.pending) {
+        t.pending.resolveAt += d;
+        for (const h of this.heroes()) if (h.pending && h.pending.clashWith === t) h.pending.resolveAt = t.pending.resolveAt;
+      } else t.readyAt = Math.max(t.readyAt, this.clock) + d;
+      this.flashText(t, `SHOCKED +${d}t`, '#ffe14d'); this.say(`${t.name} is shocked: next action delayed ${d}t.`);
+    }
+  }
+
+  applyChargeDisruption(u, delay) {
+    const p = u.pending;
+    if (!p || p.kind === 'assist' || p.clashWith || !delay) return;
+    p.resolveAt += delay;
+    for (const a of this.heroes()) if (a.pending && a.pending.kind === 'assist' && a.pending.host === u) a.pending.resolveAt = p.resolveAt;
+  }
+
+  releaseAssisters(host) {
+    for (const a of this.heroes()) if (a.pending && a.pending.host === host) {
+      if (a.pending.kind === 'grapple') this.releaseGrapple(a, `${a.name} lets go: ${host.name}'s attack fizzled.`);
+      else if (a.pending.kind === 'assist') { a.pending = null; a.readyAt = this.clock + 1; }
+    }
+  }
+
+  // Slide a unit's view to its current logical position, cancelling any shake/lunge in progress.
+  moveView(u, dur) {
+    const v = this.unitViews.find((x) => x.u === u);
+    this.tweens.getTweensOf(v.c).forEach((t) => { if (t.data && t.data.some((d) => d.key === 'x' || d.key === 'y')) t.stop(); });
+    v.moving = true;
+    this.tweens.add({ targets: v.c, x: u.x, y: u.y, duration: dur, ease: 'Quad.easeInOut',
+      onComplete: () => { v.moving = false; v.c.setPosition(u.x, u.y); } });
+  }
+
+  releaseGrapple(g, msg) {
+    const p = g.pending;
+    if (p && p.target && p.target.heldBy === g) p.target.heldBy = null;
+    g.pending = null; g.readyAt = this.clock + 1;
+    g.x = g.home.x; g.y = g.home.y;
+    this.moveView(g, 260);
+    if (msg) this.say(msg);
+  }
+
+  heroTurn(h) {
+    return new Promise((resolve) => {
+      this.active = h;
+      const done = (text) => { if (text) this.say(text); this.menu = null; this.active = null; resolve(); };
+      const mainMenu = () => {
+        const opts = h.moves.map((key) => this.moveOption(h, key, done, mainMenu));
+        this.menu = { title: `${h.name}'s turn. Choose an action.`, opts };
+        this.redraw();
+      };
+      mainMenu();
+    });
+  }
+
+  moveOption(h, key, done, back) {
+    const m = CONFIG.moves[key];
+    const pickTarget = (title, list, fn) => {
+      this.menu = { title, opts: [...list.map((t) => ({ label: t.label, sub: t.sub || '', on: () => fn(t.unit) })),
+        { label: 'Back', sub: '', on: back }] };
+      this.redraw();
+    };
+    switch (m.kind) {
+      case 'attack': {
+        const cost = m.cost || 0;
+        return { label: m.name, sub: `melee · ${m.windup}t · ${m.dmg} dmg${cost ? ` · ${cost} ck` : m.chakraGain ? ` · +${m.chakraGain} ck` : ''}`, disabled: h.chakra < cost, on: () =>
+          pickTarget(`${m.name}: pick a target`, this.enemies().map((e) => ({ unit: e, label: e.name, sub: `${e.hp}/${e.maxHp} HP` })), (t) => {
+            h.chakra -= cost;
+            h.pending = { key, kind: 'attack', spent: cost, target: t, ticks: m.windup, power: m.dmg, startAt: this.clock, resolveAt: this.clock + m.windup, seq: this.seq++, bonus: 0 };
+            done(`${h.name} starts ${m.name} → ${t.name} (lands in ${m.windup}t)`);
+          }) };
+      }
+      case 'beam': {
+        const minCost = m.min * m.costPerTick;
+        const clashable = this.enemies().some((e) => e.pending && e.pending.kind === 'beam' && !this.units.some((u) => u.pending && u.pending.clashWith === e)
+          && e.pending.resolveAt - this.clock >= m.min && e.pending.resolveAt - this.clock <= m.max);
+        return { label: `⚡ ${m.name}`, hot: clashable && h.chakra >= minCost,
+          sub: clashable ? `BEAM · can CLASH now · ${m.min}–${m.max}t` : `BEAM · ${m.min}–${m.max}t · ${beamPower(m, m.min)}–${beamPower(m, m.max)} pow · ${m.costPerTick} ck/t`, disabled: h.chakra < minCost,
+          on: () => this.beamMenu(h, key, m, done, back, pickTarget) };
+      }
+      case 'guard':
+        return { label: 'Guard', sub: `take ${Math.round((1 - CONFIG.guardReduction) * 100)}% dmg until next turn`, on: () => {
+          h.guard = true; h.readyAt = this.clock + m.recover; done(`${h.name} takes a guard stance.`);
+        } };
+      case 'bodyguard': {
+        const allies = this.heroes().filter((a) => a !== h);
+        return { label: 'Bodyguard', sub: 'auto-take hits aimed at an ally', disabled: !allies.length, on: () =>
+          pickTarget('Bodyguard: protect who?', allies.map((a) => ({ unit: a, label: a.name, sub: a.pending ? 'charging!' : `${a.hp}/${a.maxHp} HP` })), (t) => {
+            h.protecting = t; h.readyAt = this.clock + m.recover; done(`${h.name} stands guard over ${t.name}.`);
+          }) };
+      }
+      case 'assist': {
+        const inf = CONFIG.infusions[h.infusion];
+        const hosts = this.heroes().filter((a) => a !== h && a.pending && a.pending.kind !== 'assist' && CONFIG.moves[a.pending.key].assistable
+          && a.pending.resolveAt - this.clock > m.ticks && !(a.pending.assistedBy || []).includes(h));
+        const why = !hosts.length ? 'no ally charge to infuse' : h.chakra < m.cost ? 'not enough chakra' : `+${m.bonus} + ${inf.tag} · ${m.ticks}t · ${m.cost} ck`;
+        return { label: `Assist (${inf.tag})`, sub: why, disabled: !hosts.length || h.chakra < m.cost, hot: hosts.length && h.chakra >= m.cost, on: () =>
+          pickTarget(`Assist: infuse ${inf.name} (${inf.desc})`, hosts.map((a) => ({ unit: a, label: `${a.name}'s ${CONFIG.moves[a.pending.key].name}`,
+            sub: `${a.pending.clashWith ? 'CLASH · ' : ''}lands in ${a.pending.resolveAt - this.clock}t${(a.pending.infusions || []).length ? ' · ' + a.pending.infusions.map((k) => CONFIG.infusions[k].tag).join('+') : ''}` })), (t) => {
+            h.chakra -= m.cost;
+            const tp = t.pending; tp.infusions = tp.infusions || []; (tp.assistedBy = tp.assistedBy || []).push(h);
+            let add = m.bonus, combo = '';
+            if (!tp.infusions.includes(h.infusion)) {
+              tp.infusions.push(h.infusion);
+              if (tp.infusions.length > 1) { add += CONFIG.comboBonusPerExtraInfusion; combo = ` TEAM COMBO ×${tp.infusions.length}!`; }
+            }
+            if (h.infusion === 'shell') tp.shell = true;
+            tp.bonus = (tp.bonus || 0) + add;
+            h.pending = { key, kind: 'assist', host: t, target: t, resolveAt: this.clock + m.ticks, seq: this.seq++ };
+            this.flashText(t, combo ? `COMBO +${add}` : `+${add} ${inf.tag}`, COL.goldCss);
+            done(`${h.name} infuses ${t.name}'s ${CONFIG.moves[tp.key].name} with ${inf.name} (+${add}).${combo}`);
+          }) };
+      }
+      case 'grapple': {
+        const hosts = this.heroes().filter((a) => {
+          const p = a.pending; if (a === h || !p || !['beam', 'attack'].includes(p.kind) || p.clashWith) return false;
+          const r = p.resolveAt - this.clock;
+          return p.target && p.target.alive && !p.target.heldBy && r > m.reach && r - m.reach <= m.maxHold;
+        });
+        return { label: 'Grapple', sub: hosts.length ? 'pin the target of an ally\'s charge' : `needs an ally attack landing in ${m.reach + 1}–${m.reach + m.maxHold}t`,
+          disabled: !hosts.length, hot: hosts.length > 0, on: () =>
+          pickTarget('Grapple: hold down whose target?', hosts.map((a) => ({ unit: a, label: `${a.pending.target.name} for ${a.name}`,
+            sub: `${CONFIG.moves[a.pending.key].name} lands in ${a.pending.resolveAt - this.clock}t · hold ${a.pending.resolveAt - this.clock - m.reach}t` })), (a) => {
+            h.pending = { key, kind: 'grapple', host: a, target: a.pending.target, grabAt: this.clock + m.reach, resolveAt: a.pending.resolveAt, seq: this.seq++ };
+            done(`${h.name} charges in to grab ${a.pending.target.name} for ${a.name}'s ${CONFIG.moves[a.pending.key].name}!`);
+          }) };
+      }
+      case 'wait':
+        return { label: 'Wait', sub: 'act again next tick', on: () => { h.readyAt = this.clock + 1; done(`${h.name} waits.`); } };
+    }
+  }
+
+  beamMenu(h, key, m, done, back, pickTarget) {
+    const opts = [];
+    for (const e of this.enemies()) {
+      const ep = e.pending;
+      if (!ep || ep.kind !== 'beam' || this.units.some((u) => u.pending && u.pending.clashWith === e)) continue;
+      const r = ep.resolveAt - this.clock, cost = r * m.costPerTick, pow = beamPower(m, r);
+      const en = CONFIG.moves[ep.key].name;
+      if (r < m.min) opts.push({ label: `Clash ${e.name}`, sub: `too late: fires in ${r}t, needs ${m.min}t+`, disabled: true });
+      else if (r > m.max) opts.push({ label: `Clash ${e.name}`, sub: `fires in ${r}t: act first, clash later`, disabled: true });
+      else opts.push({ label: `CLASH: ${en}`, hot: true, disabled: h.chakra < cost,
+        sub: `${r}t · ${pow} vs ${ep.power} · ${cost} ck`, on: () => {
+          h.chakra -= cost;
+          h.pending = { key, kind: 'beam', spent: cost, clashWith: e, target: e, ticks: r, power: pow, startAt: this.clock, resolveAt: ep.resolveAt, seq: this.seq++, bonus: 0 };
+          done(`${h.name} locks ${m.name} (${pow}) to CLASH with the ${en} (${ep.power})! Allies can Assist.`);
+        } });
+    }
+    for (let t = m.min; t <= m.max; t++) {
+      const cost = t * m.costPerTick, pow = beamPower(m, t);
+      opts.push({ label: `Charge ${t}t → ${pow}`, sub: `${cost} chakra`, disabled: h.chakra < cost, on: () =>
+        pickTarget(`${m.name} ${t}t: pick a target`, this.enemies().map((e) => ({ unit: e, label: e.name, sub: `${e.hp}/${e.maxHp} HP` })), (tg) => {
+          h.chakra -= cost;
+          h.pending = { key, kind: 'beam', spent: cost, target: tg, ticks: t, power: pow, startAt: this.clock, resolveAt: this.clock + t, seq: this.seq++, bonus: 0 };
+          done(`${h.name} charges ${m.name} for ${t}t (${pow}) → ${tg.name}`);
+        }) });
+    }
+    opts.push({ label: 'Back', sub: '', on: back });
+    this.menu = { title: `${m.name}: clash a beam, or pick a charge time (${h.chakra} chakra)`, opts };
+    this.redraw();
+  }
+
+  isCharging(u) { return !!(u.pending && ['attack', 'beam'].includes(u.pending.kind) && u.pending.ticks >= 3); }
+  focusChance(u, dmg) {
+    if (!this.isCharging(u) || u.pending.shell) return 0;
+    return Math.min(CONFIG.focus.maxChance, dmg * CONFIG.focus.chancePerDamage);
+  }
+  // What a reaction costs this hero: power off their charge, or time off their next turn.
+  reactionCost(u, loss, idleDelay) {
+    const p = u.pending;
+    if (p && ['attack', 'beam'].includes(p.kind)) {
+      const now = p.power + (p.bonus || 0), after = Math.round(now * (1 - loss));
+      return { text: `${CONFIG.moves[p.key].short} ${now}→${after}`, apply: () => {
+        p.power = Math.round(p.power * (1 - loss)); p.bonus = Math.round((p.bonus || 0) * (1 - loss));
+        this.flashText(u, `CHARGE −${Math.round(loss * 100)}%`, COL.danger);
+      } };
+    }
+    if (p && p.kind === 'grapple') return { text: `lets go of ${p.target.name}`, apply: () => this.releaseGrapple(u, null) };
+    return { text: `next turn +${idleDelay}t`, apply: () => { u.readyAt = Math.max(u.readyAt, this.clock) + idleDelay; } };
+  }
+
+  reactionPrompt(e, m, target, est) {
+    return new Promise((resolve) => {
+      const pick = (r) => { this.menu = null; this.redraw(); resolve(r); };
+      const RC = CONFIG.reactCost, opts = [];
+      for (const a of this.heroes()) if (a !== target) {
+        const c = this.reactionCost(a, RC.diveChargeLoss, RC.diveIdleDelay);
+        opts.push({ label: `Dive in: ${a.name}`, sub: `−${CONFIG.diveIn.reduction * 100}% dmg · ${c.text} · ${CONFIG.diveIn.cost} Res`,
+          disabled: this.resolve < CONFIG.diveIn.cost, hot: true, on: () => { c.apply(); pick({ type: 'dive', hero: a }); } });
+      }
+      const bc = this.reactionCost(target, RC.braceChargeLoss, RC.braceIdleDelay);
+      opts.push({ label: 'Brace', sub: `−${CONFIG.brace.reduction * 100}% dmg · ${bc.text} · ${CONFIG.brace.cost} Res`,
+        disabled: this.resolve < CONFIG.brace.cost, on: () => { bc.apply(); pick({ type: 'brace' }); } });
+      const tp = target.pending;
+      if (this.isCharging(target) && !tp.clashWith) {
+        const mv = CONFIG.moves[tp.key], charged = this.clock - tp.startAt;
+        if (charged >= 1) {
+          const base = isBeam(mv) ? beamPower(mv, charged) : Math.round(mv.dmg * charged / mv.windup);
+          const pow = Math.round((base + (tp.bonus || 0)) * CONFIG.fireEarly.powerMult);
+          opts.push({ label: 'Fire early', hot: true, sub: `release now at ${pow} (charged ${charged}t)`, on: () => {
+            tp.power = pow; tp.bonus = 0; tp.resolveAt = this.clock;
+            this.say(`${target.name} fires the ${mv.name} early!`); pick({ type: 'fire' });
+          } });
+        }
+        const refund = Math.round((tp.spent || 0) * CONFIG.abortCharge.refund);
+        opts.push({ label: 'Abort charge', sub: `cancel ${mv.short} · get back ${refund} of ${tp.spent || 0} chakra`, on: () => {
+          this.releaseAssisters(target); target.pending = null; target.readyAt = this.clock + 1;
+          target.chakra = Math.min(target.maxChakra, target.chakra + refund);
+          this.flashText(target, 'ABORTED', COL.danger);
+          this.say(`${target.name} abandons the ${mv.name} (+${refund} chakra back).`);
+          pick({ type: 'none' });
+        } });
+      }
+      const fc = this.focusChance(target, est);
+      opts.push({ label: 'Take the hit', sub: fc ? `${Math.round(fc * 100)}% chance ${target.name} loses focus` : 'save your Resolve', on: () => pick({ type: 'none' }) });
+      this.active = target;
+      const warn = fc ? ` ${target.name} is charging: ${Math.round(fc * 100)}% to lose focus.` : tp && tp.shell ? ` ${target.name}'s charge is shelled.` : '';
+      this.menu = { title: `REACT! ${e.name}'s ${isBeam(m) ? '⚡BEAM ' : ''}${m.name} will hit ${target.name} for ${est}.${warn}`, danger: true, opts };
+      this.redraw();
+    }).then((r) => { this.active = null; return r; });
+  }
+
+  // ------------------------------------------------------------ damage + fx
+  damage(u, n, big, quiet) {
+    const shelled = u.side === 'hero' && u.pending && u.pending.shell;
+    if (shelled) n = Math.round(n * (1 - CONFIG.infusions.shell.reduction));
+    u.hp = Math.max(0, u.hp - n);
+    const v = this.unitViews.find((x) => x.u === u);
+    this.floatText(u.x, u.y - u.r - 10, `-${n}`, quiet ? '#ffb14d' : u.side === 'hero' ? COL.danger : '#ffffff', big ? 30 : quiet ? 16 : 22);
+    if (!quiet && !v.moving) this.tweens.add({ targets: v.c, x: u.x + 6, duration: 40, yoyo: true, repeat: 3, onComplete: () => { if (!v.moving) v.c.setPosition(u.x, u.y); } });
+    if (big) this.cameras.main.shake(220, 0.008);
+    if (u.side === 'hero') {
+      this.gainResolve(CONFIG.resolve.onHitTaken);
+      const fc = shelled ? 0 : this.focusChance(u, n);
+      if (fc > 0) {
+        const p = u.pending, nm = CONFIG.moves[p.key].name;
+        if (Math.random() < fc) {
+          const F = CONFIG.focus;
+          p.power = Math.round(p.power * (1 - F.powerLoss)); p.bonus = Math.round((p.bonus || 0) * (1 - F.powerLoss));
+          if (!p.clashWith) this.applyChargeDisruption(u, F.delay);
+          this.flashText(u, 'FOCUS SHAKEN', COL.danger);
+          this.say(`${u.name}'s focus is shaken (${Math.round(fc * 100)}%): ${nm} −${F.powerLoss * 100}%${p.clashWith ? '' : `, +${F.delay}t`}.`);
+        } else this.say(`${u.name} keeps focus on the ${nm} (${Math.round(fc * 100)}% risk).`);
+      }
+    }
+    if (u.side === 'hero' && u.pending && u.pending.kind === 'grapple' && n >= CONFIG.moves.grapple.breakDamage && u.hp > 0) {
+      this.flashText(u, 'GRIP BROKEN', COL.danger);
+      this.releaseGrapple(u, `${u.name}'s grip is broken by the hit!`);
+    }
+    if (u.hp <= 0) {
+      if (u.side === 'hero' && u.pending && u.pending.kind === 'grapple') this.releaseGrapple(u, null);
+      if (u.heldBy) { const g = u.heldBy; u.heldBy = null; if (g.pending && g.pending.kind === 'grapple') this.releaseGrapple(g, null); }
+      u.alive = false; u.pending = null; u.guard = false; u.protecting = null;
+      if (u.side === 'hero') this.releaseAssisters(u);
+      this.say(`${u.name} is down!`);
+      this.tweens.add({ targets: v.c, alpha: 0.25, duration: 400 });
+    }
+    this.redraw();
+  }
+
+  async lunge(a, t, m) {
+    const v = this.unitViews.find((x) => x.u === a);
+    if (isBeam(m)) {
+      const g = this.add.graphics().setDepth(15);
+      g.lineStyle(14, a.color, 0.9); g.lineBetween(a.x, a.y, t.x, t.y);
+      g.lineStyle(5, 0xffffff, 1); g.lineBetween(a.x, a.y, t.x, t.y);
+      this.tweens.add({ targets: g, alpha: 0, duration: 450, onComplete: () => g.destroy() });
+      await this.wait(220);
+    } else {
+      const dx = (t.x - a.x) * 0.25, dy = (t.y - a.y) * 0.25;
+      if (!v.moving) this.tweens.add({ targets: v.c, x: a.x + dx, y: a.y + dy, duration: 120, yoyo: true, ease: 'Quad.easeOut', onComplete: () => { if (!v.moving) v.c.setPosition(a.x, a.y); } });
+      await this.wait(160);
+    }
+  }
+
+  floatText(x, y, s, color, size = 22) {
+    const t = this.add.text(x, y, s, { fontFamily: FONT_D, fontSize: size + 'px', fontStyle: '700', color, stroke: '#0a0d1c', strokeThickness: 5 }).setOrigin(0.5).setDepth(30);
+    this.tweens.add({ targets: t, y: y - 36, alpha: 0, duration: 900, ease: 'Cubic.easeOut', onComplete: () => t.destroy() });
+  }
+  flashText(u, s, color) { this.floatText(u.x, u.y + u.r + 18, s, color, 18); }
+
+  // ------------------------------------------------------------ beam clash
+  beamClash(hero, enemy, em, epend) {
+    const hp = hero.pending.power + (hero.pending.bonus || 0);
+    const ep = epend.power + (epend.bonus || 0);
+    const hm = CONFIG.moves[hero.pending.key];
+    this.say(`BEAM CLASH! ${hero.name}'s ${hm.name} (${hp}) vs ${enemy.name}'s ${em.name} (${ep})`);
+    return new Promise((resolve) => {
+      const g = this.add.graphics().setDepth(25);
+      const banner = this.add.text(W / 2, 170, 'BEAM CLASH!', { fontFamily: FONT_D, fontSize: '44px', fontStyle: '700', color: '#ffffff', stroke: '#0a0d1c', strokeThickness: 8 }).setOrigin(0.5).setDepth(26);
+      const help = this.add.text(W / 2, 212, 'MASH SPACE or TAP to push!', { fontFamily: FONT_D, fontSize: '20px', color: COL.goldCss, stroke: '#0a0d1c', strokeThickness: 5 }).setOrigin(0.5).setDepth(26);
+      this.tweens.add({ targets: banner, scale: { from: 1.6, to: 1 }, duration: 300, ease: 'Back.easeOut' });
+      this.clashState = { hero, enemy, hp, ep, hm, em, g, banner, help, t: 0,
+        p: clamp((hp - ep) * CONFIG.clash.powerBias, -CONFIG.clash.maxStartShift, CONFIG.clash.maxStartShift)
+          + ((hero.pending.infusions || []).includes('shock') ? CONFIG.infusions.shock.clashPush : 0), hpend: hero.pending, resolve };
+      this.menu = { title: `BEAM CLASH! ${hero.name} ${hp} power vs ${enemy.name} ${ep}. Mash!`, danger: true, opts: [] };
+      this.redraw();
+    });
+  }
+  clashTap() {
+    const c = this.clashState; if (!c) return;
+    c.p += CONFIG.clash.pushPerTap;
+    this.cameras.main.shake(60, 0.004);
+  }
+  update(time, delta) {
+    const c = this.clashState; if (!c) return;
+    c.t += delta;
+    c.p -= CONFIG.clash.enemyPushPerSec * clamp(c.ep / c.hp, 0.6, 1.8) * (delta / 1000);
+    const x0 = c.hero.x + 30, x1 = c.enemy.x - c.enemy.r;
+    const k = (clamp(c.p, -1, 1) + 1) / 2;
+    const mx = x0 + (x1 - x0) * k, my = c.hero.y + (c.enemy.y - c.hero.y) * k;
+    const g = c.g; g.clear();
+    const jit = () => (Math.random() - 0.5) * 6;
+    g.lineStyle(18, c.hero.color, 0.85); g.lineBetween(x0, c.hero.y, mx, my + jit());
+    g.lineStyle(6, 0xffffff, 1); g.lineBetween(x0, c.hero.y, mx, my);
+    g.lineStyle(22, c.enemy.color, 0.85); g.lineBetween(x1, c.enemy.y, mx, my + jit());
+    g.lineStyle(7, 0xffffff, 1); g.lineBetween(x1, c.enemy.y, mx, my);
+    g.fillStyle(0xffffff, 0.9); g.fillCircle(mx, my, 16 + Math.random() * 10);
+    g.fillStyle(COL.gold, 0.5); g.fillCircle(mx, my, 30 + Math.random() * 14);
+    // push meter
+    g.fillStyle(0x000000, 0.5); g.fillRect(W / 2 - 200, 236, 400, 14);
+    g.fillStyle(c.enemy.color, 1); g.fillRect(W / 2 - 200, 236, 400, 14);
+    g.fillStyle(c.hero.color, 1); g.fillRect(W / 2 - 200, 236, 400 * k, 14);
+    g.fillStyle(0xffffff, 1); g.fillRect(W / 2 - 200 + 400 * k - 2, 232, 4, 22);
+    if (Math.abs(c.p) >= 1 || c.t >= CONFIG.clash.durationMs) this.endClash(c.p > 0);
+  }
+  endClash(win) {
+    const c = this.clashState; this.clashState = null;
+    c.g.destroy(); c.help.destroy();
+    c.banner.setText(win ? `${c.hero.name.toUpperCase()} WINS THE CLASH!` : `${c.enemy.name.toUpperCase()} OVERPOWERS!`);
+    this.tweens.add({ targets: c.banner, alpha: 0, delay: 900, duration: 400, onComplete: () => c.banner.destroy() });
+    const hero = c.hero; hero.pending = null; hero.readyAt = this.clock + c.hm.recover; this.releaseAssisters(hero);
+    this.menu = null;
+    const margin = Math.min(1, Math.abs(c.p));
+    if (win) {
+      const dmg = Math.round(c.hp * (0.8 + 0.4 * margin) + c.ep * CONFIG.clash.winKeepsEnemyBeam);
+      this.say(`${hero.name} wins the clash! The beams slam into ${c.enemy.name} for ${dmg}.`);
+      this.lunge(hero, c.enemy, c.hm).then(() => { this.damage(c.enemy, dmg, true); this.applyInfusions(c.enemy, c.hpend); this.gainResolve(2); c.resolve(); });
+    } else {
+      const share = CONFIG.clash.loseTakeMin + (CONFIG.clash.loseTakeMax - CONFIG.clash.loseTakeMin) * margin;
+      const dmg = Math.round(c.ep * share);
+      this.say(`${c.enemy.name} overpowers ${hero.name}, but the clash ate ${Math.round((1 - share) * 100)}% of the beam: ${dmg} dmg.`);
+      this.lunge(c.enemy, hero, c.em).then(() => { this.damage(hero, dmg, true); c.resolve(); });
+    }
+  }
+
+  // ------------------------------------------------------------ input
+  onKey(e) {
+    if (this.clashState) { if (e.code === 'Space' || e.key.length === 1) this.clashTap(); return; }
+    const n = parseInt(e.key, 10);
+    if (this.menu && n >= 1) {
+      const o = this.menu.opts[n - 1]; if (o && !o.disabled) o.on();
+    }
+  }
+  pick(i) { const o = this.menu && this.menu.opts[i]; if (o && !o.disabled) o.on(); } // test hook
+
+  // ------------------------------------------------------------ views
+  mkView(u) {
+    const c = this.add.container(u.x, u.y).setDepth(10);
+    const g = this.add.graphics();
+    const glow = this.add.graphics();
+    const name = this.add.text(0, -u.r - 40, u.name, { fontFamily: FONT_D, fontSize: u.r > 40 ? '20px' : '17px', fontStyle: '700', color: hex(u.color) }).setOrigin(0.5);
+    const hpBg = this.add.rectangle(0, -u.r - 16, 96, 7, 0x000000, 0.6);
+    const hpFg = this.add.rectangle(-48, -u.r - 16, 96, 7, u.color).setOrigin(0, 0.5);
+    const hpT = this.add.text(52, -u.r - 16, '', { fontFamily: FONT_B, fontSize: '12px', color: COL.dim }).setOrigin(0, 0.5);
+    const ckBg = this.add.rectangle(0, 0, 96, 5, 0x000000, 0.6).setVisible(false);
+    const ckFg = this.add.rectangle(0, 0, 96, 5, 0x9d8cff).setOrigin(0, 0.5).setVisible(false);
+    const ckT = this.add.text(0, 0, '', { fontFamily: FONT_B, fontSize: '11px', color: '#b3a8ff' }).setOrigin(1, 0.5);
+    const status = this.add.text(0, u.r + 14, '', { fontFamily: FONT_B, fontSize: '13px', color: COL.text, align: 'center' }).setOrigin(0.5, 0);
+    if (u.side === 'hero') {
+      g.fillStyle(u.color, 0.18); g.fillRoundedRect(-u.r, -u.r, u.r * 2, u.r * 2, 10);
+      g.lineStyle(3, u.color, 1); g.strokeRoundedRect(-u.r, -u.r, u.r * 2, u.r * 2, 10);
+      g.fillStyle(u.color, 1); g.fillTriangle(u.r - 14, -8, u.r - 4, 0, u.r - 14, 8);
+      const lx = -u.r - 18;
+      const race = this.add.text(lx, -2, u.race, { fontFamily: FONT_B, fontSize: '11px', color: COL.dim }).setOrigin(1, 0.5);
+      c.add(race);
+      name.setOrigin(1, 0.5).setPosition(lx, -19);
+      hpBg.setPosition(lx - 48, 14); hpFg.setPosition(lx - 96, 14); hpT.setOrigin(1, 0.5).setPosition(lx - 102, 14);
+      ckBg.setPosition(lx - 48, 25).setVisible(true); ckFg.setPosition(lx - 96, 25).setVisible(true); ckT.setPosition(lx - 102, 26);
+    } else {
+      const pts = []; const sides = u.r > 40 ? 6 : 4;
+      for (let i = 0; i < sides; i++) { const a = (Math.PI * 2 * i) / sides + Math.PI / sides; pts.push({ x: Math.cos(a) * u.r, y: Math.sin(a) * u.r }); }
+      g.fillStyle(u.color, 0.2); g.fillPoints(pts, true);
+      g.lineStyle(3, u.color, 1); g.strokePoints(pts, true, true);
+      g.fillStyle(u.color, 1); g.fillCircle(0, 0, u.r * 0.22);
+      if (u.r > 40) { name.setY(-u.r - 34); hpBg.setY(-u.r - 14); hpFg.setY(-u.r - 14); hpT.setY(-u.r - 14); }
+    }
+    c.add([glow, g, name, hpBg, hpFg, hpT, ckBg, ckFg, ckT, status]);
+    return { u, c, glow, hpFg, hpT, ckFg, ckT, status };
+  }
+
+  redraw() {
+    this.dyn.removeAll(true);
+    const D = this.dyn;
+    const T = (x, y, s, o = {}) => { const t = this.add.text(x, y, s, { fontFamily: o.f || FONT_B, fontSize: (o.s || 13) + 'px', color: o.c || COL.text, fontStyle: o.b ? '700' : 'normal', wordWrap: o.w ? { width: o.w } : undefined, align: o.a || 'left' }); D.add(t); return t; };
+    const g = this.add.graphics(); D.add(g);
+
+    // header
+    T(20, 13, 'SOL ACADEMY · SIM DECK 01', { f: FONT_D, s: 14, b: true, c: '#ffffff' });
+    T(W - 330, 13, 'RESOLVE', { f: FONT_D, s: 13, b: true, c: COL.goldCss });
+    for (let i = 0; i < CONFIG.resolve.max; i++) {
+      g.fillStyle(i < this.resolve ? COL.gold : 0x2a2f55, 1); g.fillRoundedRect(W - 258 + i * 17, 14, 13, 14, 3);
+    }
+    T(W - 78, 12, `T+${String(this.clock).padStart(2, '0')}`, { f: FONT_D, s: 16, b: true, c: '#ffffff' });
+    const eb = this.enemies().filter((e) => e.pending && e.pending.kind === 'beam');
+    if (eb.length) {
+      const e = eb[0], left = e.pending.resolveAt - this.clock;
+      const locked = this.units.find((u) => u.pending && u.pending.clashWith === e);
+      const msg = `⚡ ${e.name.toUpperCase()} BEAM ${e.pending.power} · fires in ${left}t${locked ? ` · CLASH: ${locked.name}` : ''}`;
+      const bt = T(0, 164, msg, { f: FONT_D, s: 13, b: true, c: '#ffffff' });
+      const bx = 430 - bt.width / 2; bt.setX(bx);
+      g.fillStyle(e.color, 0.35); g.fillRoundedRect(bx - 10, 159, bt.width + 20, 26, 6);
+      g.lineStyle(1, e.color, 1); g.strokeRoundedRect(bx - 10, 159, bt.width + 20, 26, 6);
+      D.bringToTop(bt);
+    }
+
+    // timeline
+    const x0 = 70, x1 = 900, span = CONFIG.timelineSpan, sw = (x1 - x0) / span, ty = 98;
+    g.lineStyle(2, COL.track, 1); g.lineBetween(x0, ty, x1, ty);
+    for (let i = 0; i <= span; i++) {
+      const x = x0 + i * sw; g.lineStyle(i === 0 ? 3 : 1, i === 0 ? 0xffffff : COL.track, 1); g.lineBetween(x, ty - (i === 0 ? 12 : 5), x, ty + (i === 0 ? 12 : 5));
+    }
+    T(20, ty - 8, 'NOW', { f: FONT_D, s: 12, b: true, c: '#ffffff' });
+    const rows = { hero: [], enemy: [] };
+    for (const u of this.units.filter((q) => q.alive)) {
+      const p = u.pending; const at = p ? p.resolveAt : Math.max(u.readyAt, this.clock);
+      const d = at - this.clock; const x = x0 + Math.min(d, span) * sw;
+      const lab = !p ? u.name : p.kind === 'grapple' ? `${u.name}: GRAB` : p.kind === 'assist' ? `${u.name}: assist` : p.clashWith ? `${u.name}: CLASH ${p.power + (p.bonus || 0)}` : `${u.name}: ${shortTag(p.key)}${p.kind === 'beam' ? ' ' + (p.power + (p.bonus || 0)) : ''}`;
+      const t = T(0, 0, lab, p ? { f: FONT_D, s: 11, b: true, c: hex(u.color) } : { s: 11, c: hex(u.color) });
+      let lx0 = x + 9; if (lx0 + t.width > W - 6) lx0 = x - 9 - t.width;
+      const span0 = Math.min(x - 7, lx0), span1 = Math.max(x + 7, lx0 + t.width) + 6;
+      const R = rows[u.side]; let n = 0;
+      while (R[n] && R[n].some(([a, b]) => span0 < b && span1 > a)) n++;
+      (R[n] = R[n] || []).push([span0, span1]);
+      const dir = u.side === 'hero' ? -1 : 1; const y = ty + dir * (15 + n * 13);
+      t.setPosition(lx0, y - 7);
+      if (p) { g.fillStyle(u.color, 1); g.fillCircle(x, y, 5); }
+      else { g.lineStyle(2, u.color, 1); g.strokeCircle(x, y, 4); }
+    }
+
+    // intent lines on the battlefield
+    for (const u of this.units.filter((q) => q.alive && q.pending && q.pending.target)) {
+      const t = u.pending.target; if (!t.alive && u.pending.kind !== 'assist') continue;
+      const m = CONFIG.moves[u.pending.key];
+      if (isBeam(m) && u.pending.kind !== 'assist') {
+        g.lineStyle(9, u.color, 0.14); g.lineBetween(u.x, u.y, t.x, t.y);
+        g.lineStyle(2, u.color, 0.8); g.lineBetween(u.x, u.y, t.x, t.y);
+        continue;
+      }
+      const dashes = 18; g.lineStyle(2, u.color, 0.55);
+      for (let i = 0; i < dashes; i += 2) {
+        const a = i / dashes, b = (i + 1) / dashes;
+        g.lineBetween(u.x + (t.x - u.x) * a, u.y + (t.y - u.y) * a, u.x + (t.x - u.x) * b, u.y + (t.y - u.y) * b);
+      }
+    }
+
+    // unit views
+    for (const v of this.unitViews) {
+      const u = v.u;
+      if (!v.moving && this.tweens.getTweensOf(v.c).every((t) => !t.data || !t.data.some((d) => d.key === 'x'))) v.c.setPosition(u.x, u.y);
+      v.hpFg.width = 96 * (u.hp / u.maxHp);
+      v.hpT.setText(`${u.hp}`);
+      if (u.side === 'hero') { v.ckFg.width = 96 * (u.chakra / u.maxChakra); v.ckT.setText(`${u.chakra} ck`); }
+      let s = '';
+      if (!u.alive) s = 'DOWN';
+      else if (u.pending) {
+        const p = u.pending, left = p.resolveAt - this.clock;
+        if (p.kind === 'assist') s = `infusing ${p.host.name} · ${left}t`;
+        else if (p.kind === 'grapple') s = p.grabbed ? `HOLDING ${p.target.name} · ${left}t` : `running in…`;
+        else if (p.clashWith) s = `CLASH LOCKED · ${left}t · ${p.power + (p.bonus || 0)} pow`;
+        else s = `${p.kind === 'beam' ? '⚡ ' : ''}${CONFIG.moves[p.key].name} · ${left}t${p.kind === 'beam' ? ` · ${p.power + (p.bonus || 0)} pow` : p.bonus ? ` · +${p.bonus}` : ''}`;
+        if (p.infusions && p.infusions.length) s += ` · ${p.infusions.map((k) => CONFIG.infusions[k].tag).join('+')}`;
+      } else if (u.guard) s = 'GUARDING';
+      else if (u.protecting) s = `bodyguarding ${u.protecting.name}`;
+      else if (u.readyAt > this.clock) s = `next turn in ${u.readyAt - this.clock}t`;
+      if (u.alive && u.heldBy) s += `${s ? '\n' : ''}PINNED by ${u.heldBy.name}`;
+      if (u.alive && u.burn && u.burn.left > 0) s += `${s ? '\n' : ''}BURNING ${u.burn.left}t`;
+      v.status.setText(s);
+      v.glow.clear();
+      if (this.active === u) { v.glow.lineStyle(3, 0xffffff, 0.9); v.glow.strokeCircle(0, 0, u.r + 14); }
+      if (u.guard || (u.side === 'hero' && this.heroes().some((h) => h.protecting === u))) { v.glow.lineStyle(2, COL.gold, 0.8); v.glow.strokeCircle(0, 0, u.r + 8); }
+    }
+
+    // log
+    T(20, 468, 'BATTLE LOG', { f: FONT_D, s: 12, b: true, c: COL.dim });
+    this.log.forEach((line, i) => T(20, 492 + i * 34, line, { s: 13, w: 395, c: i === this.log.length - 1 ? COL.text : COL.dim }));
+
+    // menu
+    if (this.menu) {
+      const tt = T(450, 464, this.menu.title, { f: FONT_D, s: 15, b: true, c: this.menu.danger ? COL.danger : '#ffffff', w: 490 });
+      const top = Math.max(500, 464 + tt.height + 10);
+      this.menu.opts.forEach((o, i) => {
+        const col = i % 2, row = Math.floor(i / 2);
+        const bx = 450 + col * 248, by = top + row * 43, bw = 238, bh = 38;
+        const r = this.add.rectangle(bx, by, bw, bh, o.hot && !o.disabled ? 0x2c2a14 : 0x1d2347, 1).setOrigin(0, 0);
+        r.setStrokeStyle(1, o.disabled ? 0x2a3160 : o.hot ? COL.gold : 0x4a5296, 1);
+        D.add(r);
+        T(bx + 10, by + 4, `${i + 1}  ${o.label}`, { f: FONT_D, s: 14, b: true, c: o.disabled ? '#565b86' : o.hot ? COL.goldCss : '#ffffff' });
+        T(bx + 26, by + 21, o.sub, { s: 11, c: o.disabled ? '#484c74' : COL.dim });
+        if (!o.disabled) {
+          r.setInteractive({ useHandCursor: true });
+          r.on('pointerover', () => r.setFillStyle(0x2a3266));
+          r.on('pointerout', () => r.setFillStyle(o.hot ? 0x2c2a14 : 0x1d2347));
+          r.on('pointerdown', () => { this.time.delayedCall(0, () => o.on()); });
+        }
+      });
+    } else if (!this.over) {
+      T(450, 466, 'Time is flowing…', { f: FONT_D, s: 15, b: true, c: COL.dim });
+      T(450, 494, 'Watch the timeline. Filled dots are actions winding up; hollow dots are units getting ready. The battle pauses when a hero can act or react.', { s: 13, c: COL.dim, w: 480 });
+    }
+  }
+
+  showEnd(win) {
+    const bg = this.add.rectangle(W / 2, 300, 460, 170, 0x0a0d1c, 0.92).setStrokeStyle(2, win ? COL.gold : 0xff6b8f).setDepth(40);
+    const t = this.add.text(W / 2, 262, win ? 'VICTORY' : 'DEFEAT', { fontFamily: FONT_D, fontSize: '42px', fontStyle: '700', color: win ? COL.goldCss : COL.danger }).setOrigin(0.5).setDepth(41);
+    const b = this.add.rectangle(W / 2, 334, 200, 44, 0x1d2347).setStrokeStyle(1, 0x4a5296).setDepth(41).setInteractive({ useHandCursor: true });
+    const bt = this.add.text(W / 2, 334, 'Fight again', { fontFamily: FONT_D, fontSize: '18px', fontStyle: '700', color: '#ffffff' }).setOrigin(0.5).setDepth(42);
+    b.on('pointerdown', () => this.time.delayedCall(0, () => { [bg, t, b, bt].forEach((o) => o.destroy()); this.startBattle(); }));
+  }
+}
+
+function boot() {
+  new Phaser.Game({
+    type: Phaser.AUTO, parent: 'game', width: W, height: H, backgroundColor: '#0a0d1c',
+    scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_HORIZONTALLY },
+    scene: [Battle],
+  });
+}
+const fontsReady = document.fonts ? Promise.race([
+  Promise.all([document.fonts.load('700 16px "Chakra Petch"'), document.fonts.load('13px "Atkinson Hyperlegible"')]),
+  new Promise((r) => setTimeout(r, 2500)),
+]) : Promise.resolve();
+fontsReady.then(boot, boot);
+
+</script>
+
+</body></html>
