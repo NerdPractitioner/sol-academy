@@ -35,3 +35,4 @@ Roadmap phases: 0 Scope · 1 Combat prototype · 2 World/story · 3 Vertical sli
 - 2026-09-25: Baseline created.
 - 2026-09-26: Moved to Claude Code handoff bundle.
 - 2026-09-26: Repo set up. Combat Lab 1.6 imported as `index.html`; handoff docs added. GitHub CLI installed for PR workflow.
+- 2026-09-26: Playtest build ready (feedback button + stats after each fight). Kit in `docs/playtest.md`. Waiting on the Google Form link.
