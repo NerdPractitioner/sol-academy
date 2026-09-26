@@ -18,13 +18,27 @@
   .rule b { font-family: "Chakra Petch", sans-serif; letter-spacing: .05em; font-size: 13px; text-transform: uppercase; color: var(--gold); display: block; margin-bottom: 4px; }
   .rule p { margin: 0; font-size: 14px; line-height: 1.45; color: var(--text); }
   .tip { color: var(--dim); font-size: 13px; margin: 0; }
+  .badge { font-family: "Chakra Petch", sans-serif; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--bg); background: var(--gold); border-radius: 4px; padding: 2px 8px; }
+  #feedback { background: var(--panel); border: 1px solid var(--gold); border-radius: 6px; padding: 16px 18px; display: grid; gap: 10px; }
+  #feedback h2 { font-family: "Chakra Petch", sans-serif; font-size: 18px; margin: 0; color: var(--gold); letter-spacing: .04em; }
+  #feedback p { margin: 0; line-height: 1.5; }
+  #feedback .small { color: var(--dim); font-size: 13px; }
+  #feedback a.btn { justify-self: start; font-family: "Chakra Petch", sans-serif; font-weight: 700; font-size: 16px; color: var(--bg); background: var(--gold); border-radius: 6px; padding: 10px 18px; text-decoration: none; }
+  #feedback a.btn:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 </style>
 <div class="wrap">
   <header>
     <h1>COMBAT <span>LAB</span></h1>
-    <p>Prototype 1.6 · Phaser build · placeholder shapes, real rules</p>
+    <span class="badge">Playtest</span>
+    <p>Prototype 1.6 · placeholder shapes, real rules · a fight takes about 5–10 minutes</p>
   </header>
   <div id="game"></div>
+  <section id="feedback" hidden aria-live="polite">
+    <h2>Thanks for playing!</h2>
+    <p>Could you answer 5 quick questions about that fight? It takes about 2 minutes, and honest answers help most, including "I was bored" or "I had no idea what was happening".</p>
+    <a class="btn" id="feedback-link" href="#" target="_blank" rel="noopener">Give feedback</a>
+    <p class="small" id="feedback-note">Some numbers about how you played (fights, wins, which moves you used) are attached to the form. Nothing personal. You're welcome to keep fighting too.</p>
+  </section>
   <div class="rules">
     <div class="rule"><b>Wind-ups</b><p>Every move takes ticks to land. The track at the top shows who fires when, and how strong each beam is.</p></div>
     <div class="rule"><b>Chakra</b><p>Beams, Power Charge and Assist cost chakra. Strikes give 3 back, and each turn regains 2.</p></div>
@@ -44,6 +58,17 @@
 //  COMBAT LAB v0.6  —  timeline combat prototype (Phaser 3)
 //  Every number you might want to tune lives in CONFIG below.
 // =====================================================================
+// ---------------------------------------------------------------------
+//  PLAYTEST: the feedback button shown after each fight.
+//  feedbackUrl = a Google Form "pre-filled link" where the stats question
+//  was filled in with the word STATS. The game swaps in real numbers.
+//  Leave it empty and the button stays hidden (fine for your own testing).
+// ---------------------------------------------------------------------
+const PLAYTEST = {
+  build: 'combat-lab-1.6-pt1',
+  feedbackUrl: '',
+};
+
 const CONFIG = {
   tickMs: 450,              // real-time length of one timeline tick
   timelineSpan: 12,         // ticks visible on the timeline
@@ -124,6 +149,38 @@ const shortTag = (key) => (isBeam(CONFIG.moves[key]) ? '⚡' : '') + CONFIG.move
 const hex = (n) => '#' + n.toString(16).padStart(6, '0');
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
+// Playtest stats: counts what testers actually do, kept in browser storage so a refresh doesn't lose it.
+const Stats = {
+  key: 'sol-academy-playtest-' + PLAYTEST.build,
+  d: null,
+  load() {
+    try { this.d = JSON.parse(localStorage.getItem(this.key)); } catch (e) { this.d = null; }
+    if (!this.d) this.d = { fights: 0, wins: 0, losses: 0, secs: 0, counts: {} };
+  },
+  save() { try { localStorage.setItem(this.key, JSON.stringify(this.d)); } catch (e) { /* storage blocked: keep in memory */ } },
+  add(name, n = 1) { this.d.counts[name] = (this.d.counts[name] || 0) + n; this.save(); },
+  fightStart() { this.d.fights++; this.started = Date.now(); this.save(); },
+  fightEnd(win) {
+    this.d[win ? 'wins' : 'losses']++;
+    if (this.started) this.d.secs += Math.round((Date.now() - this.started) / 1000);
+    this.started = null; this.save();
+  },
+  summary() {
+    const d = this.d, c = Object.entries(d.counts).sort().map(([k, v]) => `${k}=${v}`).join(' ');
+    const touch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    return `${PLAYTEST.build} | fights ${d.fights} (W${d.wins} L${d.losses}) | ${Math.round(d.secs / 60)} min | ${touch ? 'touch' : 'mouse'} ${window.innerWidth}px | ${c}`;
+  },
+};
+Stats.load();
+
+function showFeedback() {
+  if (!PLAYTEST.feedbackUrl) return;
+  const url = PLAYTEST.feedbackUrl.replace(/=STATS(?=&|$)/, '=' + encodeURIComponent(Stats.summary()));
+  document.getElementById('feedback-link').href = url;
+  const box = document.getElementById('feedback');
+  if (box.hidden) { box.hidden = false; box.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+}
+
 class Battle extends Phaser.Scene {
   constructor() { super('battle'); }
 
@@ -153,6 +210,7 @@ class Battle extends Phaser.Scene {
   // ------------------------------------------------------------ state
   startBattle() {
     this.battleId = (this.battleId || 0) + 1;
+    Stats.fightStart();
     this.clock = 0; this.seq = 0; this.resolve = CONFIG.resolve.start;
     this.log = ['Timeline combat: every action takes ticks to wind up. Watch the track above.'];
     this.menu = null; this.active = null; this.over = false;
@@ -246,6 +304,7 @@ class Battle extends Phaser.Scene {
     const win = this.enemies().length === 0, lose = this.heroes().length === 0;
     if (!win && !lose) return false;
     this.over = true; this.menu = null; this.active = null;
+    Stats.fightEnd(win);
     this.say(win ? 'Victory! The squad holds the line.' : 'Defeat. The squad is down.');
     this.redraw(); this.showEnd(win);
     return true;
@@ -284,6 +343,7 @@ class Battle extends Phaser.Scene {
           p.ticks = c.nt; p.power = beamPower(c.m, c.nt); p.resolveAt = ep.resolveAt; p.clashWith = e; p.target = e;
           for (const a of this.heroes()) if (a.pending && a.pending.host === c.h) a.pending.resolveAt = ep.resolveAt;
           this.say(`${c.h.name} bends the ${c.m.name} to meet the ${CONFIG.moves[ep.key].name}! CLASH LOCKED.`);
+          Stats.add('redirect');
           this.menu = null; this.active = null; this.redraw(); resolve();
         } }));
       opts.push({ label: 'Keep charging', sub: 'fire at the original target', on: () => { this.menu = null; this.active = null; this.redraw(); resolve(); } });
@@ -397,7 +457,7 @@ class Battle extends Phaser.Scene {
       this.active = h;
       const done = (text) => { if (text) this.say(text); this.menu = null; this.active = null; resolve(); };
       const mainMenu = () => {
-        const opts = h.moves.map((key) => this.moveOption(h, key, done, mainMenu));
+        const opts = h.moves.map((key) => this.moveOption(h, key, (text) => { Stats.add('move.' + key); done(text); }, mainMenu));
         this.menu = { title: `${h.name}'s turn. Choose an action.`, opts };
         this.redraw();
       };
@@ -533,7 +593,7 @@ class Battle extends Phaser.Scene {
 
   reactionPrompt(e, m, target, est) {
     return new Promise((resolve) => {
-      const pick = (r) => { this.menu = null; this.redraw(); resolve(r); };
+      const pick = (r) => { Stats.add('react.' + r.type); this.menu = null; this.redraw(); resolve(r); };
       const RC = CONFIG.reactCost, opts = [];
       for (const a of this.heroes()) if (a !== target) {
         const c = this.reactionCost(a, RC.diveChargeLoss, RC.diveIdleDelay);
@@ -560,7 +620,7 @@ class Battle extends Phaser.Scene {
           target.chakra = Math.min(target.maxChakra, target.chakra + refund);
           this.flashText(target, 'ABORTED', COL.danger);
           this.say(`${target.name} abandons the ${mv.name} (+${refund} chakra back).`);
-          pick({ type: 'none' });
+          pick({ type: 'abort' });
         } });
       }
       const fc = this.focusChance(target, est);
@@ -652,6 +712,7 @@ class Battle extends Phaser.Scene {
   clashTap() {
     const c = this.clashState; if (!c) return;
     c.p += CONFIG.clash.pushPerTap;
+    c.taps = (c.taps || 0) + 1;
     this.cameras.main.shake(60, 0.004);
   }
   update(time, delta) {
@@ -681,6 +742,7 @@ class Battle extends Phaser.Scene {
     c.g.destroy(); c.help.destroy();
     c.banner.setText(win ? `${c.hero.name.toUpperCase()} WINS THE CLASH!` : `${c.enemy.name.toUpperCase()} OVERPOWERS!`);
     this.tweens.add({ targets: c.banner, alpha: 0, delay: 900, duration: 400, onComplete: () => c.banner.destroy() });
+    Stats.add(win ? 'clash.won' : 'clash.lost'); Stats.add('clash.taps', c.taps || 0);
     const hero = c.hero; hero.pending = null; hero.readyAt = this.clock + c.hm.recover; this.releaseAssisters(hero);
     this.menu = null;
     const margin = Math.min(1, Math.abs(c.p));
@@ -868,6 +930,7 @@ class Battle extends Phaser.Scene {
     const b = this.add.rectangle(W / 2, 334, 200, 44, 0x1d2347).setStrokeStyle(1, 0x4a5296).setDepth(41).setInteractive({ useHandCursor: true });
     const bt = this.add.text(W / 2, 334, 'Fight again', { fontFamily: FONT_D, fontSize: '18px', fontStyle: '700', color: '#ffffff' }).setOrigin(0.5).setDepth(42);
     b.on('pointerdown', () => this.time.delayedCall(0, () => { [bg, t, b, bt].forEach((o) => o.destroy()); this.startBattle(); }));
+    showFeedback();
   }
 }
 

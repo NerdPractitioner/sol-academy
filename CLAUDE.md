@@ -35,6 +35,7 @@ Civilizations reach "Tier 3", a black-hole portal opens, and humanity is taken t
 - `docs/combat-design-notes.md` — how the current prototype's rules work, plus tuning knobs
 - `docs/nerd-practitioner-brand-brief.md` — brand, mission, voice, revenue ladder
 - `docs/HANDOFF.md` — setup steps and first-session prompts
+- `docs/playtest.md` — playtest kit: hosting, Google Form setup, message to testers
 
 ## Suggested next 1–2 weeks
 1. Get 3–5 non-friend people to play Combat Lab for 10 minutes and note confusion/boredom.
